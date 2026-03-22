@@ -1,32 +1,35 @@
-# RagSync
+# Glia 🧠
+**The self-pruning semantic cache for living RAG architectures.**
 
-**High-Performance Semantic Caching & Real-Time Synchronization for RAG Pipelines**
+Glia is a Python library that wraps around an existing semantic caching workflow to add three critical capabilities: dependency-tagged cache storage, targeted cache invalidation via a background watcher, and developer-controlled embedding injection[cite: 5].
 
-RagSync is a robust, developer-first library designed to solve the two biggest bottlenecks in Retrieval-Augmented Generation (RAG) applications: LLM latency and stale context. 
+It is an additive wrapper designed to sit alongside your existing notebooks or applications without requiring changes to how you parse documents, generate FAQs, or interact with your LLMs[cite: 6, 58]. 
 
-By implementing a lightning-fast two-stage semantic cache and a database-agnostic real-time monitoring engine, RagSync ensures your RAG pipeline serves instant, contextually accurate answers while autonomously invalidating outdated data.
+## 🌟 Core Philosophy: Zero Workflow Modification
+Adding Glia requires almost zero refactoring.The document loading pipeline, the LLM setup, the Redis connection, and your overall execution flow remain completely unchanged[cite: 63, 64, 65, 67].You simply add a small initialization block and a single metadata argument to your existing storage call[cite: 7].Everything else continues unchanged[cite: 8].
 
----
+## ✨ Key Features
+***Developer-Controlled Embeddings:** Pass in your existing embedding provider (`embed()` and `embed_many()`); the library does not force or instantiate its own LLMs[cite: 17, 19, 111].
+* **Dependency Tagging:** Every cached response is tied to a `source_id` tag (like a file name or node ID) saved directly in the custom schema[cite: 20, 21].
+* **Targeted Invalidation:** A dedicated `CacheInvalidator` allows you to delete all entries tied to a specific `source_id` in a single batched, atomic operation without leaving orphaned index entries[cite: 36, 39, 42].
+* **Background Watcher:** A background service monitors local file systems for modification or deletion events, automatically triggering invalidation without blocking your main thread[cite: 46, 48, 51].
 
-## 🚀 Key Features
+## 🛠 Prerequisites
+* **Python:** 3.9+ [cite: 9]
+* **Database:** Redis Stack (the RediSearch module is strictly required) [cite: 9, 114]
+* **Embeddings:** Any provider exposing an `embed` and `embed_many` interface (e.g., VertexAITextVectorizer)[cite: 19, 66].
 
-* **Two-Stage Retrieval Pipeline:** Achieves $O(\log N)$ retrieval times using an HNSW index for fast candidate generation, followed by precise verification using a local Cross-Encoder (e.g., `ms-marco-MiniLM`) to eliminate cache hallucinations.
-* **Real-Time File System Sync:** A core monitoring engine that tracks source database mutations (PostgreSQL WAL tailing, Vector DB polling, Graph DB edge monitoring) without blocking the main application thread.
-* **Smart Diffing & Invalidation:** Utilizes deterministic hashing (SHA-256) to differentiate between harmless metadata updates and true semantic changes, surgically pruning only the affected cache entries via an $O(1)$ dependency graph ledger.
-* **Database Agnostic:** Built on a strict Database Abstraction Layer. Seamlessly swap between Redis, ChromaDB, FAISS, Pinecone, or PostgreSQL without rewriting your application logic.
+## 🚀 Quick Start & Integration
 
-## 🏗️ Architecture Overview
+### 1. Initialization
+After your existing vectorizer is initialized, add a single cell to construct the `GliaManager`.Pass your existing vectorizer instance directly in[cite: 71, 72].
 
-RagSync is composed of four decoupled subsystems working in tandem:
+```python
+from glia import GliaManager, CacheInvalidator, CacheWatcher
 
-1.  **The Cache Search (Component I):** Intercepts user queries, checks the high-speed semantic cache, and routes to the primary LLM only on a verified Cache Miss.
-2.  **The Monitor (Component II):** Listens to your primary databases (SQL, Vector, Graph) for `INSERT`, `UPDATE`, or `DELETE` operations.
-3.  **The Updater (Component III):** Hashes incoming changes, checks the dependency graph, and issues targeted `DELETE` commands to the cache for stale data.
-4.  **The Integrator (Component IV):** Normalizes inputs, outputs, and exceptions across all third-party database drivers.
-
-## 📦 Installation
-
-*(Assuming deployment via pip once published)*
-
-```bash
-pip install ragsync
+# Initialize the manager with your existing vectorizer and Redis URL
+cache_manager = GliaManager(
+    vectorizer=my_existing_vectorizer, 
+    redis_url="redis://localhost:6379", 
+    distance_threshold=0.2          
+)
