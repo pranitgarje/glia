@@ -1,39 +1,17 @@
-# RagSync: Technical Specification
+# Glia: Technical Specification
 
-## System Overview
-RagSync is a high-performance semantic caching and real-time synchronization library for Retrieval-Augmented Generation (RAG) pipelines.
+**Tech Stack:** Python 3.9+, Redis Stack (RediSearch module required).
+**Integration Pattern:** Additive wrapper.The library MUST NOT modify the developer's existing document parsing, LLM interaction, or vectorizer initialization . 
 
-**Tech Stack:** Python 3.11+, Pydantic, Asyncio, PyTorch (for Cross-Encoders).
+## Core Modules
+1. **GliaManager (`manager.py`):** Handles `store()` and `check()` methods. Accepts an injected embedding provider (`vectorizer`) at initialization[cite: 126, 218]. Uses RediSearch JSON indexing with a default schema including a `source_id` TAG.
+2.**CacheInvalidator (`invalidator.py`):** Executes `delete_by_tag(source_id)` to atomically remove JSON data and index references in a single batched operation.
+3. **CacheWatcher (`watcher.py`):** Background service monitoring data sources. Operates via background threads (nest_asyncio compatible) and triggers invalidation via `delete_by_tag()`.
 
-## Component I: Two-Stage Retrieval Pipeline
-* **Stage 1 (Filter):** Converts incoming user text into a vector embedding using a lightweight model. Queries the cache database using a Hierarchical Navigable Small World (HNSW) algorithm. Must operate in $O(\log N)$ time, avoiding linear $O(N)$ scans. Returns a strict subset of Top-K nearest neighbors. If the cache is empty or lacks vectors within a broad radius, it triggers a Cache Miss.
-
-* **Stage 2 (Judge):** Utilizes a local Cross-Encoder (e.g., ms-marco-MiniLM). Formats and processes the new query alongside Top-K cached queries simultaneously. Outputs an entailment score and compares it against a strict user-configurable threshold.
-
-* **Fallback & Routing:** Upon a Cache Miss, seamlessly forwards the original query to the Main Vector Database and primary LLM. Asynchronously embeds the new query and stores both the vector and LLM response back into the Cache Database.
-
-## Component II: File System Synchronization
-* **Core Engine:** Normalizes incoming mutation events into a standardized structure containing `Database_Type`, `Operation_Type`, `Entity_ID`, and a `Timestamp`. Implements a time-windowed debouncing mechanism for bulk updates. Operates asynchronously to avoid blocking the main RAG thread.
-
-* **Trackers:**
-  * **Relational DBs (e.g., PostgreSQL):** Hooks into logical replication to read the Write-Ahead Log (WAL).
-  * **Vector DBs:** Captures the specific string or integer Vector ID that was modified.
-  * **Graph DBs (e.g., Neo4j):** Differentiates between Node property updates and Edge mutations.
-
-* **Integration:** Immediately hands off the normalized `Entity_ID` to the Dependency Graph.
-
-## Component III: Smart Diffing & Invalidation Engine
-* **Diffing:** Computes a deterministic hash (e.g., SHA-256) of the entity's core semantic data. Compares the "New State Hash" against the "Previous State Hash" to determine if invalidation is necessary.
-
-* **Dependency Graph:** Maintains a bi-directional mapping of `Source_Entity_ID` to `List[Cache_Keys]`. Lookups must execute in $O(1)$ or $O(\log N)$ time. Prunes corresponding edges when a cache key naturally expires or is deleted to prevent memory leaks.
-
-* **Targeted Pruning:** Executes atomic DELETE commands directly to the Cache Store. Removes the corresponding embedded query vector from the Stage 1 HNSW index. Strictly guarantees that unrelated cache entries remain untouched.
-
-## Component IV: Database Abstraction Layer
-* **Contracts:** Defines abstract base classes (e.g., `BaseVectorStore`, `BaseCacheStore`) with standardized method signatures. Mandates connection lifecycle methods including `initialize()`, `health_check()`, and `close()`.
-
-* **Outputs & Features:** Enforces standardized payloads, such as a `SearchResult` object containing `id`, `score`, `text_chunk`, and `metadata`. Requires drivers to declare supported features via boolean flags.
-
-* **Driver Implementations:** Vector drivers must handle metric normalization and validate vector dimensionality. Cache drivers must serialize/deserialize complex objects and translate optional TTL parameters.
-
-* **Error Handling:** Drivers must catch native exceptions (e.g., `redis.exceptions.ConnectionError`) and translate them into standardized library exceptions (e.g., `RagSyncConnectionError`).
+## Implementation Layers (Strict Order)
+* **Layer 1 (Foundation):** `exceptions.py`, `events.py` (EventEmitter, WatcherEvent), `schema.py` (SchemaBuilder) .
+* **Layer 2 (Adapter Contracts):** `adapters/base.py`, `adapters/polling.py`, `adapters/cdc.py`.
+* **Layer 3 (Cache Core):** `manager.py`, `invalidator.py` .
+* **Layer 4 (Concrete Adapters):** `vector.py`, `graph.py`, `relational.py` (Polling first, then CDC) .
+* **Layer 5 (Watcher Engine):** `runners.py`, `watcher.py`.
+* **Layer 6 (Public Surface):** `__init__.py` re-exports .
