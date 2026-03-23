@@ -1,0 +1,34 @@
+# ==========================================
+# Core Cache & Schema Dependencies
+# ==========================================
+
+# Required for interacting with Redis Stack, managing RediSearch indexes, 
+# and building the JSON schema internally[cite: 119, 134, 300, 308].
+redisvl>=0.1.0
+
+# ==========================================
+# Watcher & Background Execution
+# ==========================================
+
+# Standard Python library for monitoring local file system directories 
+# for file modification and deletion events.
+watchdog>=4.0.0
+
+# Required to ensure the background watcher threads are safe to run 
+# inside a Jupyter Notebook environment.
+nest_asyncio>=1.6.0
+
+# ==========================================
+# Concrete Adapter Dependencies (Optional/Dev)
+# ==========================================
+# These are needed to implement and test your specific CDC and Polling adapters
+# in Layer 4[cite: 310].
+
+# For GraphDBAdapter CDC and Polling using Neo4j[cite: 277].
+neo4j>=5.14.0
+
+# For RelationalDBAdapter CDC (Logical replication for PostgreSQL)[cite: 279].
+psycopg2-binary>=2.9.9
+
+# (Note: Vector database clients like 'chromadb' or 'pinecone' can be added 
+# here depending on which specific vector DB you choose to test the VectorDBAdapter against).
