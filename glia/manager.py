@@ -19,10 +19,42 @@ Architectural constraints:
 
 from __future__ import annotations
 
+import hashlib
+import json
+import struct
 from typing import Any, Dict, List, Optional
 
-from glia.schema import SchemaBuilder
+import redis
+from redis.commands.search.field import TagField, VectorField
+from redis.commands.search.indexDefinition import IndexDefinition, IndexType
+from redis.commands.search.query import Query
 
+from glia.schema import SchemaBuilder
+from glia.events import EventEmitter, WatcherEvent
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _vector_to_bytes(vector: List[float]) -> bytes:
+    """Pack a list of floats into a little-endian binary blob for Redis."""
+    return struct.pack(f"<{len(vector)}f", *vector)
+
+
+def _make_cache_key(index_name: str, prompt: str) -> str:
+    """
+    Generate a deterministic Redis key from the index name and the prompt.
+
+    Using SHA-256 keeps keys fixed-length and avoids special-character issues
+    while still being collision-resistant enough for a semantic cache.
+    """
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    return f"{index_name}:entry:{digest}"
+
+
+# ---------------------------------------------------------------------------
+# GliaManager
+# ---------------------------------------------------------------------------
 
 class GliaManager:
     """
@@ -65,6 +97,9 @@ class GliaManager:
         If set, cache entries expire after this many seconds.
         Prevents orphaned entries if the watcher fails.
         Defaults to ``None`` (no expiry).
+    emitter : EventEmitter, optional
+        Shared event emitter for cache_hit / cache_miss events.
+        If ``None``, a private emitter is created automatically.
     """
 
     def __init__(
@@ -76,8 +111,12 @@ class GliaManager:
         vector_dims: int = 768,
         custom_schema: Optional[List[Dict[str, Any]]] = None,
         ttl_seconds: Optional[int] = None,
+        emitter: Optional[EventEmitter] = None,
     ) -> None:
+        # ── Injected dependencies (never created here) ──────────────────────
         self.vectorizer: Any = vectorizer
+
+        # ── Configuration ────────────────────────────────────────────────────
         self.redis_url: str = redis_url
         self.index_name: str = index_name
         self.distance_threshold: float = distance_threshold
@@ -85,11 +124,58 @@ class GliaManager:
         self.custom_schema: Optional[List[Dict[str, Any]]] = custom_schema
         self.ttl_seconds: Optional[int] = ttl_seconds
 
-        # SchemaBuilder is initialised here so the index schema is
-        # ready before any store() or check() call is made.
+        # ── Observability ────────────────────────────────────────────────────
+        self._emitter: EventEmitter = emitter or EventEmitter()
+
+        # ── Redis connection ─────────────────────────────────────────────────
+        self._redis: redis.Redis = redis.from_url(
+            self.redis_url,
+            decode_responses=False,   # we store raw bytes for the vector field
+        )
+
+        # ── Schema / index ───────────────────────────────────────────────────
         self._schema_builder: SchemaBuilder = SchemaBuilder(
             vector_dims=self.vector_dims,
             custom_fields=self.custom_schema or [],
+        )
+        self._ensure_index()
+
+    # ------------------------------------------------------------------
+    # Index lifecycle
+    # ------------------------------------------------------------------
+
+    def _ensure_index(self) -> None:
+        """
+        Create the RediSearch index if it does not already exist.
+
+        The index is built over JSON documents stored under the key
+        prefix ``<index_name>:entry:``.  The schema always includes:
+
+        * ``$.prompt``        – stored text (not indexed)
+        * ``$.response``      – stored text (not indexed)
+        * ``$.source_id``     – TAG field, used for invalidation
+        * ``$.prompt_vector`` – VECTOR field (cosine, FLAT algorithm)
+
+        Any ``custom_schema`` fields declared at construction time are
+        appended after the defaults.
+        """
+        try:
+            self._redis.ft(self.index_name).info()
+            # Index already exists — nothing to do.
+            return
+        except Exception:
+            pass  # Index does not exist yet; create it below.
+
+        schema = self._schema_builder.build()
+
+        definition = IndexDefinition(
+            prefix=[f"{self.index_name}:entry:"],
+            index_type=IndexType.JSON,
+        )
+
+        self._redis.ft(self.index_name).create_index(
+            fields=schema,
+            definition=definition,
         )
 
     # ------------------------------------------------------------------
@@ -106,13 +192,15 @@ class GliaManager:
         """
         Embed ``prompt`` and persist a tagged cache entry to Redis.
 
-        On each call this method must:
+        Steps
+        -----
         1. Embed ``prompt`` via ``self.vectorizer.embed()``.
-        2. Generate a deterministic cache key.
+        2. Generate a deterministic cache key (SHA-256 of the prompt).
         3. Serialise the payload as a JSON document and write it to
            Redis under the active RediSearch index.
         4. Store ``source_id`` as a TAG field so entries can be
            targeted during invalidation.
+        5. Apply ``ttl_seconds`` expiry if configured.
 
         Parameters
         ----------
@@ -134,7 +222,31 @@ class GliaManager:
         -------
         None
         """
-        ...
+        # 1. Embed the prompt using the injected vectorizer.
+        vector: List[float] = self.vectorizer.embed(prompt)
+
+        # 2. Deterministic cache key.
+        key = _make_cache_key(self.index_name, prompt)
+
+        # 3. Build the JSON payload.
+        payload: Dict[str, Any] = {
+            "prompt": prompt,
+            "response": response,
+            # Store source_id as a plain string; RediSearch indexes it as TAG.
+            "source_id": source_id,
+            # Store the vector as a list of floats — redis-py's JSON client
+            # will serialise this correctly; RediSearch reads it via $.prompt_vector.
+            "prompt_vector": vector,
+        }
+        if metadata:
+            payload.update(metadata)
+
+        # Write to Redis as a JSON document.
+        self._redis.json().set(key, "$", payload)
+
+        # 4. Apply optional TTL.
+        if self.ttl_seconds is not None:
+            self._redis.expire(key, self.ttl_seconds)
 
     def check(
         self,
@@ -165,4 +277,115 @@ class GliaManager:
         None
             If no entry is within ``self.distance_threshold``.
         """
-        ...
+        # Embed the incoming prompt.
+        query_vector: List[float] = self.vectorizer.embed(prompt)
+        query_bytes: bytes = _vector_to_bytes(query_vector)
+
+        # Build the KNN query string.
+        #
+        # RediSearch KNN syntax:
+        #   (prefilter_expression)=>[KNN k @field $param AS score_alias]
+        #
+        # We always request k=1 — we only care about the single nearest entry.
+        prefilter = f"({filter})" if filter else "*"
+        query_str = f"{prefilter}=>[KNN 1 @prompt_vector $vec AS vector_score]"
+
+        query = (
+            Query(query_str)
+            .sort_by("vector_score", asc=True)
+            .return_fields("response", "vector_score", "source_id")
+            .dialect(2)           # required for KNN / vector search
+        )
+
+        try:
+            results = self._redis.ft(self.index_name).search(
+                query,
+                query_params={"vec": query_bytes},
+            )
+        except Exception:
+            # Index not found or Redis unavailable — treat as a miss.
+            self._emitter.emit(
+                "cache_miss",
+                WatcherEvent(
+                    event_type="cache_miss",
+                    payload={"prompt": prompt, "reason": "search_error"}
+                )
+            )
+            return None
+
+        if not results.docs:
+            self._emitter.emit(
+                "cache_miss",
+                WatcherEvent(
+                    event_type="cache_miss",
+                    payload={"prompt": prompt}
+                )
+            )
+            return None
+
+        top_doc = results.docs[0]
+
+        # vector_score is a cosine *distance* in [0, 2]; lower is better.
+        distance = float(getattr(top_doc, "vector_score", 2.0))
+
+        if distance > self.distance_threshold:
+            self._emitter.emit(
+                "cache_miss",
+                WatcherEvent(
+                    event_type="cache_miss",
+                    payload= {
+                        "prompt": prompt,
+                        "distance": distance,
+                        "threshold": self.distance_threshold,
+                    }
+                ),
+            )
+            return None
+
+        response: str = top_doc.response
+
+        self._emitter.emit(
+            "cache_hit",
+            WatcherEvent(
+                    event_type="cache_hit",
+                    source_id = getattr(top_doc, "source_id", None),
+                    payload= {
+                        "prompt": prompt,
+                        "distance": distance,
+                    },
+                ),
+        )
+        return response
+
+    # ------------------------------------------------------------------
+    # Index management (utility, referenced in class diagram)
+    # ------------------------------------------------------------------
+
+    def delete_index(self, drop_documents: bool = False) -> None:
+        """
+        Drop the RediSearch index.
+
+        Parameters
+        ----------
+        drop_documents : bool
+            If ``True``, also delete all underlying JSON documents.
+            Defaults to ``False`` (index metadata only).
+        """
+        try:
+            self._redis.ft(self.index_name).dropindex(delete_documents=drop_documents)
+        except Exception:
+            pass  # Index may not exist; silently ignore.
+
+    # ------------------------------------------------------------------
+    # EventEmitter pass-through (convenience)
+    # ------------------------------------------------------------------
+
+    def on(self, event_name: str, callback: Any) -> None:
+        """
+        Register an event listener on the internal emitter.
+
+        Example
+        -------
+        >>> manager.on("cache_hit", lambda p: print("HIT", p))
+        """
+        self._emitter.on(event_name, callback)
