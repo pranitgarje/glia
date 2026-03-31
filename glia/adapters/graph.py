@@ -527,21 +527,23 @@ class GraphDBAdapter(PollingAdapter, CDCAdapter):
         high_water: Any = self._current_cursor
 
         for raw_record in records:
-            # Extract last_modified from the node for watermark tracking.
-            # Try the "n" alias first (standard RETURN n pattern), then fall
-            # back to a top-level key in case the query uses a projection.
-            ts = self._extract_last_modified(raw_record)
+            # Convert to a plain dict first so that both watermark tracking
+            # and map_to_source_id() operate on the same consistent shape.
+            if hasattr(raw_record, "data"):
+                record_dict = raw_record.data()     # Neo4j Record.data() → dict
+            elif hasattr(raw_record, "_asdict"):
+                record_dict = raw_record._asdict()  # named-tuple style
+            else:
+                record_dict = dict(raw_record)      # already dict-like
+
+            # Extract last_modified from the converted dict for watermark
+            # tracking.  Must happen after conversion — the raw Neo4j Record
+            # object does not expose node properties directly.
+            ts = self._extract_last_modified(record_dict)
             if ts is not None and (high_water is None or ts > high_water):
                 high_water = ts
 
-            # Yield as a plain dict so map_to_source_id() and PollingRunner
-            # always receive a consistent, JSON-serialisable type.
-            if hasattr(raw_record, "data"):
-                yield raw_record.data()     # Neo4j Record.data() → dict
-            elif hasattr(raw_record, "_asdict"):
-                yield raw_record._asdict()  # named-tuple style
-            else:
-                yield dict(raw_record)      # already dict-like
+            yield record_dict
 
         self._current_cursor = high_water
 
