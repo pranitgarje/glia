@@ -1,6 +1,6 @@
 import sys
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Adjust this path if necessary to find your 'glia' package
 sys.path.insert(0, "/home/claude") 
@@ -48,7 +48,7 @@ class TestGraphDBAdapterIntegration(unittest.TestCase):
         """Test that the adapter successfully polls the real database."""
         
         # We use a cursor slightly older than our inserted data
-        initial_cursor = datetime(2024, 1, 1, 9, 0, 0)
+        initial_cursor = datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
         
         adapter = GraphDBAdapter(
             driver=self.driver,
@@ -56,7 +56,7 @@ class TestGraphDBAdapterIntegration(unittest.TestCase):
             mode="polling",
             source_id_field="doc_id",
             node_label="TestDocument", 
-            database="neo4j",
+            database=None,
             poll_interval=10.0,
             last_cursor=initial_cursor,
         )
