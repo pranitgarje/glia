@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  # 1. Redis Stack (Includes RediSearch required by Glia)
+  redis-stack:
+    image: redis/redis-stack-server:latest
+    container_name: glia-redis
+    ports:
+      - "6379:6379"
+    # Optional: uncomment below to persist Redis data
+    # volumes:
+    #   - redis-data:/data
+
+  # 2. ChromaDB Server
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: glia-chroma
+    ports:
+      - "8000:8000"
+    # Optional: uncomment below to persist Chroma data
+    # volumes:
+    #   - chroma-data:/chroma/chroma
+
+# volumes:
+#   redis-data:
+#   chroma-data:
