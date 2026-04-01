@@ -5,6 +5,7 @@
 # Required for interacting with Redis Stack, managing RediSearch indexes, 
 # and building the JSON schema internally
 redisvl>=0.1.0
+redis
 
 # ==========================================
 # Watcher & Background Execution
