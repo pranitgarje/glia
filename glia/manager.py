@@ -174,7 +174,7 @@ class GliaManager:
         )
 
         self._redis.ft(self.index_name).create_index(
-            fields=schema,
+            fields=schema.redis_fields,
             definition=definition,
         )
 

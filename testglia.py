@@ -79,8 +79,8 @@ from glia.watcher import CacheWatcher
 class _ConcretePollingAdapter(PollingAdapter):
     """Minimal concrete polling adapter used throughout the tests."""
 
-    def __init__(self, records=None, cursor_val=None, **kwargs):
-        super().__init__(mode="polling", source_id_field="id", **kwargs)
+    def __init__(self, mode="polling", records=None, cursor_val=None, **kwargs):
+        super().__init__(mode=mode, source_id_field="id", **kwargs)
         self._records: list = records or []
         self._cursor = cursor_val
         self.connected = False
