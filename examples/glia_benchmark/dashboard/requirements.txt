@@ -1,0 +1,18 @@
+# ── Core Glia dependencies ────────────────────────────────────────────────────
+redis>=5.0.0
+redisvl>=0.2.0
+
+# ── Database drivers ───────────────────────────────────────────────────────────
+psycopg2-binary>=2.9.9        # PostgreSQL
+neo4j>=5.18.0                 # Neo4j Bolt driver
+qdrant-client>=1.8.0          # Qdrant vector store
+
+# ── Embeddings (local — no API key needed) ────────────────────────────────────
+sentence-transformers>=2.7.0
+torch>=2.0.0                  # required by sentence-transformers
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+flask>=3.0.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+numpy>=1.26.0
