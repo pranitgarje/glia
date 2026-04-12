@@ -1,0 +1,15 @@
+# Glia Closed-Loop Validation System — Python dependencies
+#
+# Install with:
+#   pip install -r requirements.txt
+
+# ── Glia and its hard dependencies ────────────────────────────────────────
+glia                      # your library (already installed via pip)
+redis>=5.0.0              # Redis client (required by glia)
+redisvl>=0.2.0            # Schema builder (required by glia.schema)
+
+# ── PostgreSQL ─────────────────────────────────────────────────────────────
+psycopg2-binary>=2.9.9    # PostgreSQL DB-API 2.0 driver
+
+# ── (Optional) enhanced output ─────────────────────────────────────────────
+# colorama>=0.4.6         # Windows ANSI colour support (uncomment if needed)

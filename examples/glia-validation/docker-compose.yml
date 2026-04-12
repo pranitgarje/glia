@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  # ── Redis Stack ──────────────────────────────────────────────────────────
+  # Provides RedisJSON + RediSearch — both required by GliaManager.
+  redis:
+    image: redis/redis-stack:latest
+    container_name: glia_redis
+    ports:
+      - "6379:6379" # Redis / RediSearch
+      - "8001:8001" # RedisInsight (browser UI at http://localhost:8001)
+    environment:
+      REDIS_ARGS: "--loglevel warning"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - redis_data:/data
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────
+  # Source database monitored by RelationalDBAdapter in polling mode.
+  postgres:
+    image: postgres:16-alpine
+    container_name: glia_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: gliadb
+      POSTGRES_USER: glia
+      POSTGRES_PASSWORD: gliapassword
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glia -d gliadb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # volumes:
+    #   - postgres_data:/var/lib/postgresql/data
+    #   - ./mock_db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+volumes:
+  redis_data:
+  postgres_data:
